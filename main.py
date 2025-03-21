@@ -59,18 +59,18 @@ class DataModel(BaseModel):
     ProfileUrl: str
     Timestamp: str
 
-class UserData(BaseModel):
-    IP: int
-    Data: DataModel
-
-    @field_validator('Data')
+    @field_validator('Timestamp')
     @classmethod
     def validate_timestamp(cls, v):
         try:
-            datetime.fromisoformat(v.Timestamp.replace('Z', '+00:00'))
+            datetime.fromisoformat(v.replace('Z', '+00:00'))
         except ValueError:
             raise ValueError('Invalid timestamp format')
         return v
+
+class UserData(BaseModel):
+    IP: str
+    Data: DataModel
 
 async def verify_token(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)):
     if not credentials:
@@ -78,7 +78,7 @@ async def verify_token(credentials: Optional[HTTPAuthorizationCredentials] = Dep
             status_code=401,
             content={
                 "error": "Authentication required",
-                "message": "No token provided. Please include a Bearer token in the Authorization header."
+                "message": "No token provided"
             },
             headers={"WWW-Authenticate": "Bearer"}
         )
@@ -89,7 +89,7 @@ async def verify_token(credentials: Optional[HTTPAuthorizationCredentials] = Dep
             status_code=500,
             content={
                 "error": "Server configuration error",
-                "message": "Token not configured on server"
+                "message": "Token not configured"
             }
         )
     
@@ -98,7 +98,7 @@ async def verify_token(credentials: Optional[HTTPAuthorizationCredentials] = Dep
             status_code=401,
             content={
                 "error": "Invalid token",
-                "message": "The provided authentication token is invalid"
+                "message": "Invalid authentication token"
             },
             headers={"WWW-Authenticate": "Bearer"}
         )
@@ -113,7 +113,7 @@ async def check_duplicates(data: List[UserData]) -> Optional[JSONResponse]:
     batch_keys: Set[str] = set()
     
     for item in data:
-        user_key = create_user_key(str(item.IP), item.Data.UserID, item.Data.Username)
+        user_key = create_user_key(item.IP, item.Data.UserID, item.Data.Username)
         redis_key = f"user:{item.Data.Username}:{item.Data.Timestamp}"
         
         if user_key in seen_combinations:
@@ -121,8 +121,7 @@ async def check_duplicates(data: List[UserData]) -> Optional[JSONResponse]:
                 status_code=400,
                 content={
                     "error": "Duplicate entry detected",
-                    "message": f"Multiple entries from IP {item.IP} with UserID {item.Data.UserID} and Username {item.Data.Username}",
-                    "status": "error"
+                    "message": f"Multiple entries from IP {item.IP}"
                 }
             )
         seen_combinations.add(user_key)
@@ -140,7 +139,7 @@ async def check_duplicates(data: List[UserData]) -> Optional[JSONResponse]:
             if data_str:
                 item = json.loads(data_str)
                 existing_key = create_user_key(
-                    str(item["IP"]),
+                    item["IP"],
                     item["Data"]["UserID"],
                     item["Data"]["Username"]
                 )
@@ -153,8 +152,7 @@ async def check_duplicates(data: List[UserData]) -> Optional[JSONResponse]:
                     status_code=400,
                     content={
                         "error": "Duplicate user detected",
-                        "message": f"Entry from IP {ip} with UserID {userid} and Username {username} already exists",
-                        "status": "error"
+                        "message": f"Entry already exists"
                     }
                 )
                 
@@ -166,8 +164,7 @@ async def check_duplicates(data: List[UserData]) -> Optional[JSONResponse]:
             status_code=500,
             content={
                 "error": "Error checking duplicates",
-                "message": str(e),
-                "status": "error"
+                "message": str(e)
             }
         )
 
@@ -209,8 +206,7 @@ async def upload_data(
             status_code=500,
             content={
                 "error": "Upload failed",
-                "message": str(e),
-                "status": "error"
+                "message": str(e)
             }
         )
 
@@ -247,8 +243,7 @@ async def get_all(
             status_code=500,
             content={
                 "error": "Data retrieval failed",
-                "message": str(e),
-                "status": "error"
+                "message": str(e)
             }
         )
 
