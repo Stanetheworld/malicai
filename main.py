@@ -42,7 +42,6 @@ app.add_middleware(
 security = HTTPBearer(auto_error=False)
 
 cache: Dict[str, dict] = {}
-CACHE_TTL = 300
 
 class DataModel(BaseModel):
     Continent: str
@@ -215,7 +214,7 @@ async def upload_data(
 
 @app.get("/get_all")
 @limiter.limit("50/minute")
-@lru_cache(maxsize=100, ttl=300)
+@lru_cache(maxsize=100)
 async def get_all(
     request: Request,
     token: str = Depends(verify_token)
