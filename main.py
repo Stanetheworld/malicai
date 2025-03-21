@@ -63,14 +63,6 @@ class UserData(BaseModel):
     IP: str
     Data: DataModel
 
-    @field_validator('*')
-    @classmethod
-    def sanitize_input(cls, v):
-        if isinstance(v, str):
-            v = v.strip()
-            v = v.replace('<', '&lt;').replace('>', '&gt;')
-        return v
-
     @field_validator('Data')
     @classmethod
     def validate_timestamp(cls, v):
@@ -86,8 +78,7 @@ async def verify_token(credentials: Optional[HTTPAuthorizationCredentials] = Dep
             status_code=401,
             content={
                 "error": "Authentication required",
-                "message": "No token provided. Please include a Bearer token in the Authorization header.",
-                "docs": "Include 'Authorization: Bearer your-token' in request headers"
+                "message": "No token provided. Please include a Bearer token in the Authorization header."
             },
             headers={"WWW-Authenticate": "Bearer"}
         )
@@ -107,8 +98,7 @@ async def verify_token(credentials: Optional[HTTPAuthorizationCredentials] = Dep
             status_code=401,
             content={
                 "error": "Invalid token",
-                "message": "The provided authentication token is invalid",
-                "docs": "Ensure you're using the correct token"
+                "message": "The provided authentication token is invalid"
             },
             headers={"WWW-Authenticate": "Bearer"}
         )
