@@ -60,7 +60,7 @@ class DataModel(BaseModel):
     Timestamp: str
 
 class UserData(BaseModel):
-    IP: str
+    IP: int
     Data: DataModel
 
     @field_validator('Data')
@@ -113,7 +113,7 @@ async def check_duplicates(data: List[UserData]) -> Optional[JSONResponse]:
     batch_keys: Set[str] = set()
     
     for item in data:
-        user_key = create_user_key(item.IP, item.Data.UserID, item.Data.Username)
+        user_key = create_user_key(str(item.IP), item.Data.UserID, item.Data.Username)
         redis_key = f"user:{item.Data.Username}:{item.Data.Timestamp}"
         
         if user_key in seen_combinations:
@@ -140,7 +140,7 @@ async def check_duplicates(data: List[UserData]) -> Optional[JSONResponse]:
             if data_str:
                 item = json.loads(data_str)
                 existing_key = create_user_key(
-                    item["IP"],
+                    str(item["IP"]),
                     item["Data"]["UserID"],
                     item["Data"]["Username"]
                 )
@@ -265,3 +265,7 @@ async def http_exception_handler(request, exc):
 async def general_exception_handler(request, exc):
     logger.error(f"Unexpected error: {str(exc)}")
     return {"error": "Internal server error", "status_code": 500}
+
+@app.get("/")
+async def version():
+    return {"version": "1.0.0"}
