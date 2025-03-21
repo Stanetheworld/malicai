@@ -12,11 +12,12 @@ class Person(BaseModel):
     name: str
     other_info: dict
 
-@app.post("/upload")
-async def upload_data(data: List[Person]):
-    for person in data:
-        database[person.id] = person.dict()
-    return {"message": "Data uploaded successfully", "total": len(database)}
+@app.route("/upload", methods=["POST"])
+def upload_data():
+    global data_store
+    new_data = request.json  # Get JSON data from request
+    data_store.extend(new_data)  # Store data
+    return jsonify({"message": "Data uploaded successfully", "data_count": len(data_store)}), 200
 
 @app.get("/get_all")
 async def get_all():
