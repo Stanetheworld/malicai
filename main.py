@@ -3,8 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, field_validator
-from typing import List, Dict, Optional, Set, Tuple
+from pydantic import BaseModel, field_validator, Field
+from typing import List, Dict, Optional, Set, Tuple, Any
 from datetime import datetime
 import logging
 import time
@@ -70,7 +70,10 @@ class DataModel(BaseModel):
 
 class UserData(BaseModel):
     IP: str
-    Data: DataModel
+    Data: Dict[str, Any]
+    
+    class Config:
+        extra = "allow"
 
 async def verify_token(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)):
     if not credentials:
@@ -113,8 +116,8 @@ async def check_duplicates(data: List[UserData]) -> Optional[JSONResponse]:
     batch_keys: Set[str] = set()
     
     for item in data:
-        user_key = create_user_key(item.IP, item.Data.UserID, item.Data.Username)
-        redis_key = f"user:{item.Data.Username}:{item.Data.Timestamp}"
+        user_key = create_user_key(item.IP, item.Data["UserID"], item.Data["Username"])
+        redis_key = f"user:{item.Data['Username']}:{item.Data['Timestamp']}"
         
         if user_key in seen_combinations:
             return JSONResponse(
@@ -188,7 +191,7 @@ async def upload_data(
 
         pipeline = redis_client.pipeline()
         for item in data:
-            key = f"user:{item.Data.Username}:{item.Data.Timestamp}"
+            key = f"user:{item.Data['Username']}:{item.Data['Timestamp']}"
             pipeline.setex(key, 3600, item.json())
         pipeline.execute()
 
