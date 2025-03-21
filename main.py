@@ -13,6 +13,8 @@ from slowapi.errors import RateLimitExceeded
 import redis
 from functools import lru_cache
 import os
+from dotenv import load_dotenv
+load_dotenv() 
 
 logging.basicConfig(
     level=logging.INFO,
