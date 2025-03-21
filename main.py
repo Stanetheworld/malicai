@@ -2,8 +2,9 @@ from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Set, Tuple
 from datetime import datetime
 import logging
 import time
@@ -13,6 +14,7 @@ from slowapi.errors import RateLimitExceeded
 import redis
 from functools import lru_cache
 import os
+import json
 from dotenv import load_dotenv
 load_dotenv() 
 
@@ -37,13 +39,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-security = HTTPBearer()
+security = HTTPBearer(auto_error=False)
 
 cache: Dict[str, dict] = {}
 CACHE_TTL = 300
 
-class UserData(BaseModel):
-    IP: str
+class DataModel(BaseModel):
     Continent: str
     Country: str
     RegionName: str
@@ -58,6 +59,10 @@ class UserData(BaseModel):
     ProfileUrl: str
     Timestamp: str
 
+class UserData(BaseModel):
+    IP: str
+    Data: DataModel
+
     @field_validator('*')
     @classmethod
     def sanitize_input(cls, v):
@@ -66,23 +71,115 @@ class UserData(BaseModel):
             v = v.replace('<', '&lt;').replace('>', '&gt;')
         return v
 
-    @field_validator('timestamp')
+    @field_validator('Data')
     @classmethod
     def validate_timestamp(cls, v):
         try:
-            datetime.fromisoformat(v.replace('Z', '+00:00'))
+            datetime.fromisoformat(v.Timestamp.replace('Z', '+00:00'))
         except ValueError:
             raise ValueError('Invalid timestamp format')
         return v
 
-async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
+async def verify_token(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)):
+    if not credentials:
+        return JSONResponse(
+            status_code=401,
+            content={
+                "error": "Authentication required",
+                "message": "No token provided. Please include a Bearer token in the Authorization header.",
+                "docs": "Include 'Authorization: Bearer your-token' in request headers"
+            },
+            headers={"WWW-Authenticate": "Bearer"}
+        )
+    
+    expected_token = os.getenv("token")
+    if not expected_token:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "Server configuration error",
+                "message": "Token not configured on server"
+            }
+        )
+    
+    if credentials.credentials != expected_token:
+        return JSONResponse(
+            status_code=401,
+            content={
+                "error": "Invalid token",
+                "message": "The provided authentication token is invalid",
+                "docs": "Ensure you're using the correct token"
+            },
+            headers={"WWW-Authenticate": "Bearer"}
+        )
+    
+    return credentials.credentials
+
+def create_user_key(ip: str, userid: int, username: str) -> str:
+    return f"{ip}:{userid}:{username}"
+
+async def check_duplicates(data: List[UserData]) -> Optional[JSONResponse]:
+    seen_combinations: Set[str] = set()
+    batch_keys: Set[str] = set()
+    
+    for item in data:
+        user_key = create_user_key(item.IP, item.Data.UserID, item.Data.Username)
+        redis_key = f"user:{item.Data.Username}:{item.Data.Timestamp}"
+        
+        if user_key in seen_combinations:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "Duplicate entry detected",
+                    "message": f"Multiple entries from IP {item.IP} with UserID {item.Data.UserID} and Username {item.Data.Username}",
+                    "status": "error"
+                }
+            )
+        seen_combinations.add(user_key)
+        batch_keys.add(redis_key)
+    
     try:
-        token = credentials.credentials
-        if token != os.getenv("token"):
-            raise HTTPException(status_code=401, detail="Invalid token")
-        return token
+        existing_keys = redis_client.keys("user:*")
+        if not existing_keys:
+            return None
+            
+        existing_data = redis_client.mget(existing_keys)
+        existing_combinations: Set[str] = set()
+        
+        for data_str in existing_data:
+            if data_str:
+                item = json.loads(data_str)
+                existing_key = create_user_key(
+                    item["IP"],
+                    item["Data"]["UserID"],
+                    item["Data"]["Username"]
+                )
+                existing_combinations.add(existing_key)
+        
+        for user_key in seen_combinations:
+            if user_key in existing_combinations:
+                ip, userid, username = user_key.split(":")
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "error": "Duplicate user detected",
+                        "message": f"Entry from IP {ip} with UserID {userid} and Username {username} already exists",
+                        "status": "error"
+                    }
+                )
+                
+        return None
+        
     except Exception as e:
-        raise HTTPException(status_code=401, detail="Invalid authorization credentials")
+        logger.error(f"Error checking duplicates: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "Error checking duplicates",
+                "message": str(e),
+                "status": "error"
+            }
+        )
 
 @app.post("/upload")
 @limiter.limit("100/minute")
@@ -91,17 +188,22 @@ async def upload_data(
     data: List[UserData],
     token: str = Depends(verify_token)
 ):
+    if isinstance(token, JSONResponse):
+        return token
+
     try:
         logger.info(f"Received upload request with {len(data)} items")
         start_time = time.time()
 
+        duplicate_check = await check_duplicates(data)
+        if duplicate_check:
+            return duplicate_check
+
+        pipeline = redis_client.pipeline()
         for item in data:
-            key = f"user:{item.username}:{item.timestamp}"
-            redis_client.setex(
-                key,
-                3600,
-                item.json()
-            )
+            key = f"user:{item.Data.Username}:{item.Data.Timestamp}"
+            pipeline.setex(key, 3600, item.json())
+        pipeline.execute()
 
         duration = time.time() - start_time
         logger.info(f"Upload processed in {duration:.2f} seconds")
@@ -113,7 +215,14 @@ async def upload_data(
         }
     except Exception as e:
         logger.error(f"Error in upload: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "Upload failed",
+                "message": str(e),
+                "status": "error"
+            }
+        )
 
 @app.get("/get_all")
 @limiter.limit("50/minute")
@@ -122,6 +231,9 @@ async def get_all(
     request: Request,
     token: str = Depends(verify_token)
 ):
+    if isinstance(token, JSONResponse):
+        return token
+
     try:
         cache_key = "all_data"
         if cache_key in cache:
@@ -141,7 +253,14 @@ async def get_all(
 
     except Exception as e:
         logger.error(f"Error in get_all: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "Data retrieval failed",
+                "message": str(e),
+                "status": "error"
+            }
+        )
 
 @app.get("/health")
 async def health_check():
